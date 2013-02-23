@@ -70,7 +70,7 @@ class Watch2ch
 
 			// 出力
 			if ('' != $res) {
-				printf("%s (%d)\n\n", $thread_info['name'], $thread_info['res']);
+				printf("%s (%d) [+%s]\n\n", $thread_info['name'], $thread_info['res'], $forces);
 				print $res;
 			}
 		}
