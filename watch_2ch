@@ -11,9 +11,6 @@
  * @license		BSD
  **/
 
-// 定義
-define('MENU_LIST_URL', 'http://menu.2ch.net/bbsmenu.html');
-
 // 引数チェック
 if (!isset($argv[1])) {
 	fputs(STDERR, "Usage: watch_2ch [config file]\n");
@@ -31,6 +28,10 @@ exit(0);
  */
 class Watch2ch
 {
+	// 定義
+	const MENU_LIST_URL = 'http://menu.2ch.net/bbsmenu.html';
+	const DEFAULT_OUTPUT_NUM = 5;
+
 	private $config;		// 設定を格納した配列
 
 	/**
@@ -46,16 +47,30 @@ class Watch2ch
 		$board_url = $this->getBordUrl($this->config['BoardName']);
 
 		// 板からスレッド一覧を取得
-		$thread_list = $this->getThreadList($board_url);
+		$thread_list = $this->getThreadList($board_url . $this->config['BoardName']);
 
 		// スレッド一覧からキーワードで最新スレッドを特定
-		$thread_id = $this->getCurrentThread($config->keyword);
+		$thread_info = $this->searchThreadList($thread_list, $this->config['Keyword']);
 
 		// スレッドの勢いを調べる
+		$forces = $this->getForces($thread_info);
 
-		// 勢いが閾値を超えていたらアラート
+		// 勢いが閾値を超えていたら最新n件の書込を出力
+		if ($forces >= $this->config['BorderForces']) {
+			if (isset($this->config['OutputNum'])) {
+				$output_num = $this->config['OutputNum'];
+			} else {
+				$output_num = self::DEFAULT_OUTPUT_NUM;
+			}
 
-		// 現在の情報を保存
+			// レスを取得
+			$url = $board_url . $this->config['BoardName'] . '/dat/' . $thread_info['dat'];
+			$res = $this->getCurrentRes($url, $output_num);
+			if ('' != $res) {
+				printf("%s (%d)\n\n", $thread_info['name'], $thread_info['res']);
+				print $res;
+			}
+		}
 	}
 
 	/**
@@ -90,10 +105,7 @@ class Watch2ch
 		$required_keys = array(
 			'BoardName',
 			'Keyword',
-			'BorderCount',
-			'BorderTime',
-			'MaxErrorCount',
-			'TmpDir',
+			'BorderForces',
 		);
 		$config_keys = array_keys($config_arr);
 		foreach ($required_keys as $key) {
@@ -115,7 +127,7 @@ class Watch2ch
 	protected function getBordUrl($board_name)
 	{
 		$pattern = sprintf('/^\<A HREF=(.+\.2ch\.net\/)%s\/\>.*$/i', $board_name);
-		$menu_list = explode("\n", $this->getUrl(MENU_LIST_URL));
+		$menu_list = explode("\n", $this->getUrl(self::MENU_LIST_URL));
 		foreach ($menu_list as $line) {
 			if (preg_match($pattern, $line, $matches)) {
 				// 対象の板が見つかったらそれをURL形式にして返す
@@ -131,16 +143,117 @@ class Watch2ch
 	/**
 	 * スレ一覧の取得
 	 * @param string $board_url 対象板のURL
-	 * @return array
+	 * @return array スレッドリスト
 	 */
 	protected function getThreadList($board_url)
 	{
-		$thread_list = $this->getUrl($board_url . '/subject.txt');
-ve($thread_list);
+		try {
+			$thread_list = $this->getUrl($board_url . '/subject.txt');
+		} catch (Exception $e) {
+			if ('302' == $e->getCode() or '404' == $e->getCode()) {
+				// サーバが移転している場合
+				try {
+					$moved_html = $this->getUrl($board_url . '/index.html');
+					//
+					// TODO サーバ移転の際の挙動を定義
+					//
+				} catch (Exception $sub_e) {
+					// 移転先の取得失敗
+					fputs(STDERR, 'Moved server get error. (' . $e->getCode() . '->' . $sub_e->getCode() . ")\n");
+					exit(1);
+				}
+			} else {
+				// スレッド一覧の取得失敗
+				fputs(STDERR, 'Thread list fetch error. (' . $e->getCode() . ")\n");
+				exit(1);
+			}
+		}
 
-		// 対象板が見つからなかった
-		fputs(STDERR, 'No match board (' . $board_name . ")\n");
-		exit(1);
+		return mb_convert_encoding($thread_list, 'UTF-8', 'SJIS');
+	}
+
+	/**
+	 * スレッドリスト検索
+	 * @param string $thread_list スレッドリスト文字列
+	 * @param string $keyword 検索文字列
+	 * @return array スレッド情報を格納した連想配列
+	 */
+	protected function searchThreadList($thread_list, $keyword)
+	{
+		$ret_arr = array();
+		$thread_list_arr = explode("\n", $thread_list);
+		foreach ($thread_list_arr as $thread) {
+			if (preg_match($keyword, $thread)) {
+				if (preg_match('/^(.*)<>(.*) \(([0-9]+)\)$/', $thread, $matches)) {
+					$ret_arr = array(
+						'dat' => $matches[1],
+						'name' => $matches[2],
+						'res' => $matches[3],
+					);
+				}
+				break;
+			}
+		}
+
+		return $ret_arr;
+	}
+
+	/**
+	 * 勢い取得
+	 * 勢いの算出方法は2ch勢いランキングに準拠
+	 * @param array $thread_info スレッド情報を格納した連想配列
+	 * @return int 勢いを表す数字
+	 * @link http://2ch-ranking.net/preface.html
+	 */
+	protected function getForces($thread_info)
+	{
+		// スレがたった時間を取得
+		$created_time = substr($thread_info['dat'], 0, strpos($thread_info['dat'], '.'));
+
+		// 勢い=1日の書き込み数=書き込み数/(スレが立ってからの秒数/86400)
+		$forces = $thread_info['res'] / ((time() - $created_time) / 86400);
+
+		// 小数点以下2桁で管理
+		$forces = round($forces, 2);
+
+		// スレ立て補正 書き込み数10未満->勢い100未満
+		if (10 > $thread_info['res']) {
+			max($forces, 99.99);
+		}
+
+		// スレ立て補正 書き込み数5未満->勢い10未満
+		if (5 > $thread_info['res']) {
+			max($forces, 9.99);
+		}
+
+		return $forces;
+	}
+
+	/**
+	 * レス取得
+	 * @param string $url 対象スレdatファイルのURL
+	 * @param int $num 取得件数
+	 * @return string 取得したレスの文字列
+	 */
+	protected function getCurrentRes($url, $num)
+	{
+		// datファイルを取得
+		$dat_contents = $this->getUrl($url);
+		$dat_arr = explode("\n", $dat_contents);
+		array_pop($dat_arr);		// 配列の最後には空要素が入るのでカット
+
+		// 指定された数のレスを取得
+		$ret = '';
+		$start = max(count($dat_arr) - $num, 0);
+		$end = count($dat_arr);
+		for ($i = $start; $i < $end; $i++) {
+			$tmp_res = mb_convert_encoding($dat_arr[$i], 'UTF-8', 'SJIS');
+			$tmp_arr = explode('<>', $tmp_res);
+			$tmp_arr[3] = html_entity_decode(strip_tags(strtr($tmp_arr[3], array('<br>' => "\n"))));		// 読みやすく整形
+			$ret .= sprintf("%d %s %s\n%s", $i + 1, $tmp_arr[0], $tmp_arr[2], $tmp_arr[3]) . "\n\n";
+		}
+
+		return $ret;
 	}
 
 	/**
