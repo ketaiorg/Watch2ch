@@ -32,7 +32,8 @@ class Watch2ch
 	const MENU_LIST_URL = 'http://menu.2ch.net/bbsmenu.html';
 	const DEFAULT_OUTPUT_NUM = 5;
 
-	private $config;		// 設定を格納した配列
+	protected $config;			// 設定を格納した配列
+	protected $board_url;		// 板のURL
 
 	/**
 	 * 実行
@@ -44,10 +45,10 @@ class Watch2ch
 		$this->config = $this->readConfigFile($config_file);
 
 		// 板一覧から対象板のURLを取得
-		$board_url = $this->getBordUrl($this->config['BoardName']);
+		$this->board_url = $this->getBordUrl($this->config['BoardName']);
 
 		// 板からスレッド一覧を取得
-		$thread_list = $this->getThreadList($board_url . $this->config['BoardName']);
+		$thread_list = $this->getThreadList($this->board_url . $this->config['BoardName']);
 
 		// スレッド一覧からキーワードで最新スレッドを特定
 		$thread_info = $this->searchThreadList($thread_list, $this->config['Keyword']);
@@ -64,7 +65,7 @@ class Watch2ch
 			}
 
 			// レスを取得
-			$url = $board_url . $this->config['BoardName'] . '/dat/' . $thread_info['dat'];
+			$url = $this->board_url . $this->config['BoardName'] . '/dat/' . $thread_info['dat'];
 			$res = $this->getCurrentRes($url, $output_num);
 
 			// 出力
@@ -151,14 +152,22 @@ class Watch2ch
 	{
 		try {
 			$thread_list = $this->getUrl($board_url . '/subject.txt');
+			if (5 > substr_count($thread_list, "\n")) {
+				// 移転と判断
+				throw new Exception('Server Moved', -200);		// 特別なステータスコードを使い例外を投げる
+			}
 		} catch (Exception $e) {
-			if ('302' == $e->getCode() or '404' == $e->getCode()) {
+			if ('302' == $e->getCode() or '404' == $e->getCode() or '-200' == $e->getCode()) {
 				// サーバが移転している場合
 				try {
 					$moved_html = $this->getUrl($board_url . '/index.html');
-					//
-					// TODO サーバ移転の際の挙動を定義
-					//
+					if (preg_match('/.*window.location.href="(.+\/)(.+)\/".*/', $moved_html, $matches)) {
+						// 移転があったので板URLを更新
+						$this->board_url = $matches[1];
+
+						// 再帰処理でスレッドリストを取得
+						return $this->getThreadList($this->board_url . $matches[2]);
+					}
 				} catch (Exception $sub_e) {
 					// 移転先の取得失敗
 					fputs(STDERR, 'Moved server get error. (' . $e->getCode() . '->' . $sub_e->getCode() . ")\n");
