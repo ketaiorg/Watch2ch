@@ -1,0 +1,204 @@
+#!/usr/bin/php
+<?php
+/* vim: set noexpandtab tabstop=4 shiftwidth=4 softtabstop=4: */
+/**
+ * Watch2ch
+ * 2chのスレッドの勢いを監視し閾値を超えないかチェックを行うスクリプト
+ *
+ * @package		Watch2ch
+ * @author		松井 健太郎 (Kentaro Matsui) <info@ke-tai.org>
+ * @copyright	ke-tai.org
+ * @license		BSD
+ **/
+
+// 定義
+define('MENU_LIST_URL', 'http://menu.2ch.net/bbsmenu.html');
+
+// 引数チェック
+if (!isset($argv[1])) {
+	fputs(STDERR, "Usage: watch_2ch [config file]\n");
+	exit(1);
+}
+
+// 実行
+$w2ch = new Watch2ch();
+$w2ch->run($argv[1]);
+exit(0);
+
+
+/**
+ * Watch2chクラス
+ */
+class Watch2ch
+{
+	private $config;		// 設定を格納した配列
+
+	/**
+	 * 実行
+	 * @param string $config_file コンフィグファイルのパス
+	 */
+	public function run($config_file)
+	{
+		// コンフィグファイルの読み込み
+		$this->config = $this->readConfigFile($config_file);
+
+		// 板一覧から対象板のURLを取得
+		$board_url = $this->getBordUrl($this->config['BoardName']);
+
+		// 板からスレッド一覧を取得
+		$thread_list = $this->getThreadList($board_url);
+
+		// スレッド一覧からキーワードで最新スレッドを特定
+		$thread_id = $this->getCurrentThread($config->keyword);
+
+		// スレッドの勢いを調べる
+
+		// 勢いが閾値を超えていたらアラート
+
+		// 現在の情報を保存
+	}
+
+	/**
+	 * コンフィグファイルの読み込み
+	 * @param string $config_file コンフィグファイルのパス
+	 * @return array 設定値の配列
+	 */
+	protected function readConfigFile($config_file)
+	{
+		if (file_exists($config_file)) {
+			// ファイルの読み込み
+			$config_text = file_get_contents($config_file);
+		} else {
+			$config_text = false;
+		}
+
+		if (false === $config_text) {
+			// ファイルが読めなかった場合
+			fputs(STDERR, 'Unnable read config file. (' . $config_file . ')' . "\n");
+			exit(1);
+		}
+
+		// デコード処理
+		$config_arr = json_decode($config_text, true);
+		if (null === $config_arr) {
+			// 不正なjson形式
+			fputs(STDERR, 'Syntax error config file. (' . $config_file . ')' . "\n");
+			exit(1);
+		}
+
+		// 必須項目チェック
+		$required_keys = array(
+			'BoardName',
+			'Keyword',
+			'BorderCount',
+			'BorderTime',
+			'MaxErrorCount',
+			'TmpDir',
+		);
+		$config_keys = array_keys($config_arr);
+		foreach ($required_keys as $key) {
+			if (!in_array($key, $config_keys)) {
+				// 必須項目がセットされていない
+				fputs(STDERR, '"' . $key . '" is required on config file.' . "\n");
+				exit(1);
+			}
+		}
+
+		return $config_arr;
+	}
+
+	/**
+	 * 板URLの取得
+	 * @param string $board_name 対象板
+	 * @return string 板のURL
+	 */
+	protected function getBordUrl($board_name)
+	{
+		$pattern = sprintf('/^\<A HREF=(.+\.2ch\.net\/)%s\/\>.*$/i', $board_name);
+		$menu_list = explode("\n", $this->getUrl(MENU_LIST_URL));
+		foreach ($menu_list as $line) {
+			if (preg_match($pattern, $line, $matches)) {
+				// 対象の板が見つかったらそれをURL形式にして返す
+				return $matches[1];
+			}
+		}
+
+		// 対象板が見つからなかった
+		fputs(STDERR, 'No match board (' . $board_name . ")\n");
+		exit(1);
+	}
+
+	/**
+	 * スレ一覧の取得
+	 * @param string $board_url 対象板のURL
+	 * @return array
+	 */
+	protected function getThreadList($board_url)
+	{
+		$thread_list = $this->getUrl($board_url . '/subject.txt');
+ve($thread_list);
+
+		// 対象板が見つからなかった
+		fputs(STDERR, 'No match board (' . $board_name . ")\n");
+		exit(1);
+	}
+
+	/**
+	 * URLリクエストメソッド
+	 * curlによるリクエストを行う
+	 * @param string $url 対象URL
+	 * @param string $last_access 前回アクセスしたUNIXTIME形式の時間(If-Modified-Sinceヘッダ用)
+	 * @return string 結果文字列
+	 * @throws Exception 予期せぬステータスコード
+	 */
+	protected function getUrl($url, $last_access = 0)
+	{
+		// cURLを利用
+		$ch = curl_init();
+		curl_setopt($ch, CURLOPT_URL, $url);
+		curl_setopt($ch, CURLOPT_HEADER, 0);
+		curl_setopt($ch, CURLOPT_TIMEVALUE, $last_access);
+		curl_setopt($ch, CURLOPT_TIMECONDITION, CURL_TIMECOND_IFMODSINCE);
+		curl_setopt($ch, CURLOPT_RETURNTRANSFER, 1);
+		curl_setopt($ch, CURLOPT_ENCODING, 'gzip');
+		$ret = curl_exec($ch);
+
+		if (false === $ret) {
+			// curlに失敗した（通信エラー）
+			curl_close($ch);
+			throw new Exception('curl error.');
+		}
+
+		// ステータスコードを取得
+		$header = curl_getinfo($ch);
+		curl_close($ch);
+		$status_code = $header['http_code'];
+
+		// ステータスコードで分岐
+		if ('200' == $status_code) {
+			// 200 OKの場合、データを返す
+			return $ret;
+		} else {
+			// その他の場合、例外を投げる
+			throw new Exception('status code error. code=' . $status_code, $status_code);
+		}
+	}
+}
+
+/**
+ * デバッグ用var_dumpメソッド
+ * @param mixed $val var_dumpしたい値
+ */
+function v($val) {
+	var_dump($val);
+}
+
+/**
+ * デバッグ用var_dump & exitメソッド
+ * @param mixed $val var_dumpしたい値
+ */
+function ve($val) {
+	v($val);
+	exit;
+}
+
