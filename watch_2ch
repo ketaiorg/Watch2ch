@@ -13,7 +13,7 @@
 
 // 引数チェック
 if (!isset($argv[1])) {
-	fputs(STDERR, "Usage: watch_2ch [config file]\n");
+	fputs(STDERR, "Usage: watch_2ch CONFIG_FILE\n");
 	exit(1);
 }
 
@@ -66,6 +66,8 @@ class Watch2ch
 			// レスを取得
 			$url = $board_url . $this->config['BoardName'] . '/dat/' . $thread_info['dat'];
 			$res = $this->getCurrentRes($url, $output_num);
+
+			// 出力
 			if ('' != $res) {
 				printf("%s (%d)\n\n", $thread_info['name'], $thread_info['res']);
 				print $res;
