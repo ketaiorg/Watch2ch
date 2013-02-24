@@ -309,20 +309,3 @@ class Watch2ch
 	}
 }
 
-/**
- * デバッグ用var_dumpメソッド
- * @param mixed $val var_dumpしたい値
- */
-function v($val) {
-	var_dump($val);
-}
-
-/**
- * デバッグ用var_dump & exitメソッド
- * @param mixed $val var_dumpしたい値
- */
-function ve($val) {
-	v($val);
-	exit;
-}
-
