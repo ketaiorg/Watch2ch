@@ -53,8 +53,11 @@ class Watch2ch
 		// スレッド一覧からキーワードで最新スレッドを特定
 		$thread_info = $this->searchThreadList($thread_list, $this->config['Keyword']);
 
+		// レスを取得
+		$res_list = $this->getResList($thread_info['dat']);
+
 		// スレッドの勢いを調べる
-		$forces = $this->getForces($thread_info);
+		$forces = $this->getForces($res_list);
 
 		// 勢いが閾値を超えていたら最新n件の書込を出力
 		if ($forces >= $this->config['BorderForces']) {
@@ -109,6 +112,7 @@ class Watch2ch
 			'BoardName',
 			'Keyword',
 			'BorderForces',
+			'Period',
 		);
 		$config_keys = array_keys($config_arr);
 		foreach ($required_keys as $key) {
@@ -210,30 +214,59 @@ class Watch2ch
 	}
 
 	/**
+	 * レス取得
+	 * @param string $dat dat番号
+	 * @return array レス情報を格納した連想配列
+	 */
+	protected function getResList($dat)
+	{
+		$url = $this->board_url . $this->config['BoardName'] . '/dat/' . $dat;
+
+		// datファイルを取得
+		$dat_contents = $this->getUrl($url);
+		$dat_arr = explode("\n", $dat_contents);
+		array_pop($dat_arr);		// 配列の最後には空要素が入るのでカット
+
+		return $dat_arr;
+	}
+
+	/**
 	 * 勢い取得
 	 * 勢いの算出方法は2ch勢いランキングに準拠
-	 * @param array $thread_info スレッド情報を格納した連想配列
+	 * @param array $res_list レス情報を格納した配列
 	 * @return int 勢いを表す数字
 	 * @link http://2ch-ranking.net/preface.html
 	 */
-	protected function getForces($thread_info)
+	protected function getForces($res_list)
 	{
-		// スレがたった時間を取得
-		$created_time = substr($thread_info['dat'], 0, strpos($thread_info['dat'], '.'));
+		// 期間内に投稿されたレスの数を取得
+		$res_value = count($res_list);		// 現在のレス数
+		$start = count($res_list) - 1;		// 配列は0から始まるのでマイナス1
 
-		// 勢い=1日の書き込み数=書き込み数/(スレが立ってからの秒数/86400)
-		$forces = $thread_info['res'] / ((time() - $created_time) / 86400);
+		// 後ろから検索
+		for ($i = $start; $i >= 0; $i--) {
+			$tmp_arr = explode('<>', $res_list[$i]);
+			$res_ts = strtotime(mb_substr($tmp_arr[2], 0, 10) . ' ' . mb_substr($tmp_arr[2], -23, 8));
+			if (time() - $this->config['Period'] > $res_ts) {
+				// ここまでが期間内
+				$res_value = $res_value - $i;
+				break;
+			}
+		}
+
+		// 勢いを計算（1日あたりの書き込み数相当に変換）
+		$forces = $res_value * ((24 * 60 * 60) / $this->config['Period']);
 
 		// 小数点以下2桁で管理
 		$forces = round($forces, 2);
 
 		// スレ立て補正 書き込み数10未満->勢い100未満
-		if (10 > $thread_info['res']) {
+		if (10 > $res_value) {
 			max($forces, 99.99);
 		}
 
 		// スレ立て補正 書き込み数5未満->勢い10未満
-		if (5 > $thread_info['res']) {
+		if (5 > $res_value) {
 			max($forces, 9.99);
 		}
 
