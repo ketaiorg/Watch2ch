@@ -52,6 +52,10 @@ class Watch2ch
 
 		// スレッド一覧からキーワードで最新スレッドを特定
 		$thread_info = $this->searchThreadList($thread_list, $this->config['Keyword']);
+		if (empty($thread_info)) {
+			printf("No hit. [keyword = '%s']\n", $this->config['Keyword']);
+			exit;
+		}
 
 		// レスを取得
 		$res_list = $this->getResList($thread_info['dat']);
